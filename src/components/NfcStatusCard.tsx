@@ -30,7 +30,7 @@ export default function NfcStatusCard() {
       <MaterialCommunityIcons
         name={(nfcAtivo ? 'nfc' : 'nfc-off')as any}
         size={28}
-        color={nfcAtivo ? '#1E8E3E' : '#D93025'}
+        color={nfcAtivo ? '#1E8E3E' : '#080302'}
       />
       <View style={styles.nfcInfo}>
         <Text style={styles.nfcTitulo}>Status do Sensor NFC</Text>
