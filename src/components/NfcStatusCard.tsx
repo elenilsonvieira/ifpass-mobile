@@ -6,7 +6,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 export default function NfcStatusCard() {
   const [nfcAtivo, setNfcAtivo] = useState<boolean>(false);
   const [verificandoNfc, setVerificandoNfc] = useState<boolean>(true);
-
+ 
   useEffect(() => {
     async function verificarNfc() {
       try {
