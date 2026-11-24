@@ -1,16 +1,15 @@
-import { Estudante } from "../types/Estudante";
+import { Estudante } from '../types/Estudante';
 
-export async function buscarDadosEstudante(): Promise<Estudante> {
-
-    return new Promise((resolve) => {
+export async function buscarDadosEstudante(matriculaCustom?: string): Promise<Estudante> {
+  return new Promise((resolve) => {
     setTimeout(() => {
       resolve({
-        nome: 'GL',
-        fotoUrl: "imagem.png",
-        curso: 'Sistema para Internet',
-        matricula: '005386875',
+        nome: 'Elenilson Vieira',
+        fotoUrl: '',
+        curso: 'Sistemas para Internet',
+        matricula: matriculaCustom?.trim() || '20241014040029',
         situacaoAtiva: true,
       });
-    }, 800);
+    }, 300);
   });
 }

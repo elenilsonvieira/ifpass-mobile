@@ -2,6 +2,13 @@ import React from 'react';
 import { StyleSheet, Text, View, Image } from 'react-native';
 import { Estudante } from '../types/Estudante';
 
+function obterIniciais(nome: string): string {
+  const partes = nome.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return 'IF';
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
+  return `${partes[0][0]}${partes[partes.length - 1][0]}`.toUpperCase();
+}
+
 export default function StudentCard({
   nome,
   fotoUrl,
@@ -9,10 +16,16 @@ export default function StudentCard({
   matricula,
   situacaoAtiva,
 }: Estudante) {
+  const temFotoValida =
+    typeof fotoUrl === 'string' &&
+    (fotoUrl.startsWith('http://') ||
+      fotoUrl.startsWith('https://') ||
+      fotoUrl.startsWith('data:'));
+
   return (
     <View style={styles.card}>
       <View style={styles.cardHeader}>
-        <Text style={styles.instituicao}>IFPASS • Identificação</Text>
+        <Text style={styles.instituicao}>IFPASS • Identificação Estudantil</Text>
         <View
           style={[
             styles.badge,
@@ -37,7 +50,14 @@ export default function StudentCard({
       </View>
 
       <View style={styles.perfilRow}>
-        <Image source={{ uri: fotoUrl }} style={styles.foto} />
+        {temFotoValida ? (
+          <Image source={{ uri: fotoUrl }} style={styles.foto} />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Text style={styles.avatarIniciais}>{obterIniciais(nome)}</Text>
+          </View>
+        )}
+
         <View style={styles.infoCol}>
           <Text style={styles.label}>Nome</Text>
           <Text style={styles.valorNome}>{nome}</Text>
@@ -49,9 +69,17 @@ export default function StudentCard({
 
       <View style={styles.divisor} />
 
-      <View>
-        <Text style={styles.label}>Curso</Text>
-        <Text style={styles.valorCurso}>{curso}</Text>
+      <View style={styles.footerInfo}>
+        <View style={{ marginBottom: 8 }}>
+          <Text style={styles.label}>Curso</Text>
+          <Text style={styles.valorCurso}>{curso}</Text>
+        </View>
+        <View>
+          <Text style={styles.label}>Instituição</Text>
+          <Text style={styles.valorInstituicao}>
+            Instituto Federal da Paraíba (IFPB) - Campus Guarabira
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -106,9 +134,25 @@ const styles = StyleSheet.create({
   foto: {
     width: 68,
     height: 85,
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: '#E1E4E8',
     marginRight: 14,
+  },
+  avatarPlaceholder: {
+    width: 68,
+    height: 80,
+    borderRadius: 10,
+    backgroundColor: '#E6F4EA',
+    borderWidth: 1,
+    borderColor: '#C8E6C9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  avatarIniciais: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#2E7D32',
   },
   infoCol: {
     flex: 1,
@@ -121,24 +165,32 @@ const styles = StyleSheet.create({
     marginBottom: 1,
   },
   valorNome: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: 'bold',
     color: '#111',
     marginBottom: 8,
   },
   valorMatricula: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: '700',
+    color: '#1E293B',
   },
   divisor: {
     height: 1,
     backgroundColor: '#EEEEEE',
     marginVertical: 12,
   },
+  footerInfo: {
+    flexDirection: 'column',
+  },
   valorCurso: {
     fontSize: 13,
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#222',
+  },
+  valorInstituicao: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#475569',
   },
 });
