@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import type { AudioPlayer } from 'expo-audio';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -29,16 +30,53 @@ interface RegistroPassagem {
   resultado: 'liberado' | 'negado';
 }
 
-// Limiar de salto magnético escalar (|B| = sqrt(x²+y²+z²)) na catraca estacionária
-// quando o outro celular (iPhone/Android) aproxima-se a poucos centímetros.
 const LIMIAR_PROXIMIDADE_CATRACA_UT = 14;
 const LEITURAS_CONSECUTIVAS = 2;
+
+function vibrarSeguro(padrao: number | number[]) {
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(padrao);
+      }
+    } catch {}
+    return;
+  }
+  try {
+    Vibration.vibrate(padrao);
+  } catch {}
+}
+
+function tocarBeepWebFallback(liberado: boolean) {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+  try {
+    const AudioCtx =
+      (window as any).AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = liberado ? 'sine' : 'sawtooth';
+    osc.frequency.setValueAtTime(liberado ? 880 : 220, ctx.currentTime);
+    if (liberado) {
+      osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.12);
+    }
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch {}
+}
 
 export default function App() {
   const [estado, setEstado] = useState<EstadoCatraca>('aguardando');
   const [modo, setModo] = useState<ModoCatraca>('liberar');
   const [conectado, setConectado] = useState<boolean>(false);
   const [usuarioArmado, setUsuarioArmado] = useState<boolean>(false);
+  const [alunoArmadoInfo, setAlunoArmadoInfo] =
+    useState<CredencialAluno | null>(null);
   const [horarioAtual, setHorarioAtual] = useState<string>('');
   const [campoDeltaUt, setCampoDeltaUt] = useState<number>(0);
   const [credencialRecebida, setCredencialRecebida] =
@@ -52,19 +90,24 @@ export default function App() {
   const estadoRef = useRef<EstadoCatraca>('aguardando');
   const autoResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Guarda o usuário que clicou em "Detectar Acesso (NFC)" no outro celular
   const usuarioArmadoRef = useRef<{
     requestId: string;
     aluno: CredencialAluno;
   } | null>(null);
 
-  // Cache de decisões por requestId para reenviar caso o outro celular retransmita
   const decisoesCacheRef = useRef<
-    Map<string, { resultado: 'liberado' | 'negado'; motivo?: string; horario: string; matricula: string }>
+    Map<
+      string,
+      {
+        resultado: 'liberado' | 'negado';
+        motivo?: string;
+        horario: string;
+        matricula: string;
+      }
+    >
   >(new Map());
   const processandoIdsRef = useRef<Set<string>>(new Set());
 
-  // Calibrador magnético escalar na catraca
   const amostrasBaseRef = useRef<number[]>([]);
   const baseMagRef = useRef<number | null>(null);
   const picosConsecutivosRef = useRef<number>(0);
@@ -84,14 +127,11 @@ export default function App() {
   }
 
   async function emitirFeedbackCatraca(liberado: boolean) {
-    try {
-      const [Audio, Haptics] = await Promise.all([
-        import('expo-audio'),
-        import('expo-haptics'),
-      ]);
+    tocarBeepWebFallback(liberado);
 
-      // Garante som no iPhone mesmo se o botão lateral de silencioso estiver ativado
-      if (typeof Audio.setAudioModeAsync === 'function') {
+    try {
+      const Audio = await import('expo-audio');
+      if (typeof Audio.setAudioModeAsync === 'function' && Platform.OS !== 'web') {
         await Audio.setAudioModeAsync({ playsInSilentMode: true });
       }
 
@@ -103,29 +143,26 @@ export default function App() {
 
       await playerRef.current.seekTo(0);
       playerRef.current.play();
+    } catch {}
 
-      if (liberado) {
-        await Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success
-        );
-        Vibration.vibrate(600);
-      } else {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        Vibration.vibrate([120, 100, 120, 100, 400]);
-      }
-    } catch (e) {
-      console.warn('Erro no feedback da catraca:', e);
+    if (Platform.OS !== 'web') {
+      try {
+        const Haptics = await import('expo-haptics');
+        if (liberado) {
+          await Haptics.notificationAsync(
+            Haptics.NotificationFeedbackType.Success
+          );
+        } else {
+          await Haptics.notificationAsync(
+            Haptics.NotificationFeedbackType.Error
+          );
+        }
+      } catch {}
     }
+
+    vibrarSeguro(liberado ? 600 : [120, 100, 120, 100, 400]);
   }
 
-  /* =========================================================================
-   * VALIDAÇÃO DA MATRÍCULA RECEBIDA VIA NFC DO CELULAR DO USUÁRIO:
-   * - Recebe a matrícula enviada pelo outro celular;
-   * - Verifica se a matrícula está preenchida e aplica o modo da catraca
-   *   (Liberar ou Recusar);
-   * - Responde imediatamente ao celular do usuário (`CATRACA_DECISION`) para
-   *   ele emitir o feedback de acesso!
-   * ========================================================================= */
   async function processarCredencialRecebida(
     requestId: string,
     aluno: CredencialAluno
@@ -155,17 +192,21 @@ export default function App() {
 
     usuarioArmadoRef.current = null;
     setUsuarioArmado(false);
+    setAlunoArmadoInfo(null);
     setCredencialRecebida(aluno);
     atualizarEstado('lendo');
-    Vibration.vibrate(60);
+    vibrarSeguro(60);
 
-    // Breve tempo de leitura/validação na catraca (450ms)
     setTimeout(async () => {
       const agora = new Date().toLocaleTimeString('pt-BR');
-      const matriculaValida = Boolean(aluno.matricula && aluno.matricula.trim().length > 0);
+      const matriculaValida = Boolean(
+        aluno.matricula && aluno.matricula.trim().length > 0
+      );
       const deveLiberar = matriculaValida && modoRef.current === 'liberar';
 
-      const resultado: 'liberado' | 'negado' = deveLiberar ? 'liberado' : 'negado';
+      const resultado: 'liberado' | 'negado' = deveLiberar
+        ? 'liberado'
+        : 'negado';
       const motivo = !matriculaValida
         ? 'Matrícula não identificada no sinal NFC'
         : modoRef.current === 'recusar'
@@ -180,7 +221,6 @@ export default function App() {
       });
       processandoIdsRef.current.delete(requestId);
 
-      // Envia a resposta da Catraca de volta para o celular do usuário (disparo duplo p/ garantia)
       const enviarResposta = () => {
         syncBusRef.current?.publish({
           type: 'CATRACA_DECISION',
@@ -215,7 +255,6 @@ export default function App() {
         ...prev.slice(0, 7),
       ]);
 
-      // Após 4.5s, a catraca fecha automaticamente e volta a aguardar o próximo sinal NFC
       autoResetTimerRef.current = setTimeout(() => {
         atualizarEstado('aguardando');
         setMotivoRecusa('');
@@ -234,23 +273,23 @@ export default function App() {
     }
 
     if (msg.type === 'NFC_ARMED') {
-      // Usuário clicou em "Detectar Acesso (NFC)" no outro celular e está trazendo para perto!
       usuarioArmadoRef.current = {
         requestId: msg.requestId,
         aluno: msg.aluno,
       };
       setUsuarioArmado(true);
+      setAlunoArmadoInfo(msg.aluno);
       return;
     }
 
     if (msg.type === 'NFC_DISARMED') {
       usuarioArmadoRef.current = null;
       setUsuarioArmado(false);
+      setAlunoArmadoInfo(null);
       return;
     }
 
     if (msg.type === 'NFC_SEND_CREDENTIAL') {
-      // Sinal NFC com a matrícula recebido do celular do usuário!
       processarCredencialRecebida(msg.requestId, msg.aluno);
       return;
     }
@@ -260,7 +299,16 @@ export default function App() {
     }
   }
 
-  // Inicializa relógio, barramento NFC em tempo real e magnetômetro da Catraca
+  function acionarSensorNfcNaCatraca() {
+    const armado = usuarioArmadoRef.current;
+    if (!armado) return;
+    syncBusRef.current?.publish({
+      type: 'CATRACA_PROXIMITY_TRIGGER',
+      requestId: armado.requestId,
+    });
+    processarCredencialRecebida(armado.requestId, armado.aluno);
+  }
+
   useEffect(() => {
     setHorarioAtual(new Date().toLocaleTimeString('pt-BR'));
     const clock = setInterval(() => {
@@ -287,55 +335,55 @@ export default function App() {
       bus.publish({ type: 'CATRACA_HEARTBEAT', modo: modoRef.current });
     }, 2500);
 
-    // Sensor de campo magnético escalar da Catraca (detecta quando o iPhone/Android do usuário se aproxima!)
     let magSub: ReturnType<typeof Magnetometer.addListener> | null = null;
-    Magnetometer.isAvailableAsync()
-      .then((disponivel) => {
-        if (!disponivel) return;
-        Magnetometer.setUpdateInterval(80);
-        magSub = Magnetometer.addListener(({ x, y, z }) => {
-          const mag = Math.sqrt(x * x + y * y + z * z);
+    if (Platform.OS !== 'web') {
+      Magnetometer.isAvailableAsync()
+        .then((disponivel) => {
+          if (!disponivel) return;
+          Magnetometer.setUpdateInterval(80);
+          magSub = Magnetometer.addListener(({ x, y, z }) => {
+            const mag = Math.sqrt(x * x + y * y + z * z);
 
-          if (baseMagRef.current === null) {
-            amostrasBaseRef.current.push(mag);
-            if (amostrasBaseRef.current.length >= 6) {
-              const soma = amostrasBaseRef.current.reduce((a, b) => a + b, 0);
-              baseMagRef.current = soma / amostrasBaseRef.current.length;
+            if (baseMagRef.current === null) {
+              amostrasBaseRef.current.push(mag);
+              if (amostrasBaseRef.current.length >= 6) {
+                const soma = amostrasBaseRef.current.reduce((a, b) => a + b, 0);
+                baseMagRef.current = soma / amostrasBaseRef.current.length;
+              }
+              return;
             }
-            return;
-          }
 
-          const delta = Math.abs(mag - baseMagRef.current);
-          setCampoDeltaUt(delta);
+            const delta = Math.abs(mag - baseMagRef.current);
+            setCampoDeltaUt(delta);
 
-          const armado = usuarioArmadoRef.current;
-          if (armado && estadoRef.current === 'aguardando') {
-            if (delta >= LIMIAR_PROXIMIDADE_CATRACA_UT) {
-              picosConsecutivosRef.current += 1;
-              if (picosConsecutivosRef.current >= LEITURAS_CONSECUTIVAS) {
+            const armado = usuarioArmadoRef.current;
+            if (armado && estadoRef.current === 'aguardando') {
+              if (delta >= LIMIAR_PROXIMIDADE_CATRACA_UT) {
+                picosConsecutivosRef.current += 1;
+                if (picosConsecutivosRef.current >= LEITURAS_CONSECUTIVAS) {
+                  picosConsecutivosRef.current = 0;
+                  syncBusRef.current?.publish({
+                    type: 'CATRACA_PROXIMITY_TRIGGER',
+                    requestId: armado.requestId,
+                  });
+                  processarCredencialRecebida(armado.requestId, armado.aluno);
+                }
+              } else {
                 picosConsecutivosRef.current = 0;
-                // A Catraca sentiu o celular do usuário encostando! Pede a credencial e já inicia leitura!
-                syncBusRef.current?.publish({
-                  type: 'CATRACA_PROXIMITY_TRIGGER',
-                  requestId: armado.requestId,
-                });
-                processarCredencialRecebida(armado.requestId, armado.aluno);
+                if (delta < 6) {
+                  baseMagRef.current = baseMagRef.current * 0.96 + mag * 0.04;
+                }
               }
             } else {
               picosConsecutivosRef.current = 0;
-              if (delta < 6) {
-                baseMagRef.current = baseMagRef.current * 0.96 + mag * 0.04;
+              if (delta < 8) {
+                baseMagRef.current = baseMagRef.current * 0.95 + mag * 0.05;
               }
             }
-          } else {
-            picosConsecutivosRef.current = 0;
-            if (delta < 8) {
-              baseMagRef.current = baseMagRef.current * 0.95 + mag * 0.05;
-            }
-          }
-        });
-      })
-      .catch(() => {});
+          });
+        })
+        .catch(() => {});
+    }
 
     return () => {
       clearInterval(clock);
@@ -356,6 +404,7 @@ export default function App() {
     }
     usuarioArmadoRef.current = null;
     setUsuarioArmado(false);
+    setAlunoArmadoInfo(null);
     atualizarEstado('aguardando');
     setMotivoRecusa('');
     setCredencialRecebida(null);
@@ -370,213 +419,242 @@ export default function App() {
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
       <ScrollView contentContainerStyle={styles.container}>
-        {/* Cabeçalho */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.headerBrand}>CATRACA IFPB • GUARABIRA</Text>
-            <Text style={styles.headerSubtitle}>
-              Simulador de Leitor NFC (Expo Go)
-            </Text>
-          </View>
-          <View style={styles.clockBadge}>
-            <View
-              style={[
-                styles.ledConexao,
-                conectado ? styles.ledVerde : styles.ledAmarelo,
-              ]}
-            />
-            <Text style={styles.clockTexto}>{horarioAtual || '--:--:--'}</Text>
-          </View>
-        </View>
-
-        {/* Pill de Status de Sincronização */}
-        <View style={styles.statusRedePill}>
-          <Text style={styles.statusRedeTexto}>
-            {!conectado
-              ? '🟡 Conectando ao canal NFC...'
-              : usuarioArmado
-              ? `🔵 Celular do usuário pronto! Encoste aqui (Δ ${Math.round(campoDeltaUt)} µT)`
-              : `🟢 Catraca Online • Aguardando sinal NFC (Δ ${Math.round(campoDeltaUt)} µT)`}
-          </Text>
-        </View>
-
-        {/* Display Central da Catraca */}
-        <View
-          style={[
-            styles.displayTerminal,
-            estado === 'lendo' && styles.displayLendo,
-            estado === 'liberado' && styles.displayLiberado,
-            estado === 'negado' && styles.displayNegado,
-          ]}
-        >
-          <View style={styles.displayHeader}>
-            <Text style={styles.displayHeaderTexto}>
-              {estado === 'aguardando' && '📶 AGUARDANDO SINAL NFC DO USUÁRIO'}
-              {estado === 'lendo' && '📡 RECEBENDO MATRÍCULA VIA NFC...'}
-              {estado === 'liberado' && '✅ CATRACA LIBERADA • PODE PASSAR'}
-              {estado === 'negado' && '⛔ CATRACA BLOQUEADA • ENTRADA RECUSADA'}
-            </Text>
-            <View
-              style={[
-                styles.ledDisplay,
-                estado === 'lendo' && styles.ledAzul,
-                estado === 'liberado' && styles.ledVerde,
-                estado === 'negado' && styles.ledVermelho,
-              ]}
-            />
-          </View>
-
-          <View style={styles.displayCorpo}>
-            {estado === 'aguardando' && (
-              <>
-                <View style={styles.radarCirculo}>
-                  <Text style={styles.radarEmoji}>📡</Text>
-                </View>
-                <Text style={styles.displayTitulo}>APROXIME O CELULAR</Text>
-                <Text style={styles.displaySub}>
-                  {usuarioArmado
-                    ? 'Detector do usuário ativado! Encoste o celular aqui'
-                    : 'A catraca está aguardando o sinal NFC do usuário'}
-                </Text>
-              </>
-            )}
-
-            {estado === 'lendo' && (
-              <>
-                <ActivityIndicator
-                  size="large"
-                  color="#60A5FA"
-                  style={{ marginBottom: 12 }}
-                />
-                <Text style={styles.displayTitulo}>
-                  MATRÍCULA DETECTADA
-                </Text>
-                <Text style={styles.displayMatricula}>
-                  {credencialRecebida?.matricula}
-                </Text>
-                <Text style={styles.displaySub}>Validando acesso...</Text>
-              </>
-            )}
-
-            {estado === 'liberado' && (
-              <>
-                <Text style={styles.iconeResultado}>✅</Text>
-                <Text style={styles.tituloLiberado}>ENTRADA LIBERADA</Text>
-                <Text style={styles.labelRecebido}>MATRÍCULA RECEBIDA VIA NFC:</Text>
-                <Text style={styles.displayMatricula}>
-                  {credencialRecebida?.matricula}
-                </Text>
-                <Text style={styles.displayNome}>
-                  {credencialRecebida?.nome}
-                </Text>
-                <Text style={styles.displayCurso}>
-                  {credencialRecebida?.curso}
-                </Text>
-              </>
-            )}
-
-            {estado === 'negado' && (
-              <>
-                <Text style={styles.iconeResultado}>⛔</Text>
-                <Text style={styles.tituloNegado}>ENTRADA RECUSADA</Text>
-                <Text style={styles.labelRecebido}>MATRÍCULA RECEBIDA VIA NFC:</Text>
-                <Text style={styles.displayMatricula}>
-                  {credencialRecebida?.matricula}
-                </Text>
-                <Text style={styles.displayNome}>
-                  {credencialRecebida?.nome}
-                </Text>
-                <Text style={styles.displayMotivo}>{motivoRecusa}</Text>
-              </>
-            )}
-          </View>
-        </View>
-
-        {/* Seletor de Decisão da Catraca (Liberar ou Recusar) */}
-        <View style={styles.seletorCard}>
-          <Text style={styles.seletorTitulo}>
-            Comportamento da Catraca ao Receber a Matrícula:
-          </Text>
-          <View style={styles.seletorBotoes}>
-            <TouchableOpacity
-              style={[
-                styles.seletorBtn,
-                modo === 'liberar' && styles.seletorBtnLiberar,
-              ]}
-              onPress={() => atualizarModo('liberar')}
-              activeOpacity={0.75}
-            >
-              <Text
-                style={[
-                  styles.seletorBtnTexto,
-                  modo === 'liberar' && styles.seletorBtnTextoAtivo,
-                ]}
-              >
-                ✅ Liberar Entrada
+        <View style={styles.wrapper}>
+          {/* Cabeçalho */}
+          <View style={styles.header}>
+            <View>
+              <Text style={styles.headerBrand}>CATRACA IFPB • GUARABIRA</Text>
+              <Text style={styles.headerSubtitle}>
+                Simulador de Leitor NFC (Expo Go & Web)
               </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.seletorBtn,
-                modo === 'recusar' && styles.seletorBtnRecusar,
-              ]}
-              onPress={() => atualizarModo('recusar')}
-              activeOpacity={0.75}
-            >
-              <Text
+            </View>
+            <View style={styles.clockBadge}>
+              <View
                 style={[
-                  styles.seletorBtnTexto,
-                  modo === 'recusar' && styles.seletorBtnTextoAtivo,
+                  styles.ledConexao,
+                  conectado ? styles.ledVerde : styles.ledAmarelo,
                 ]}
-              >
-                ⛔ Recusar Entrada
-              </Text>
-            </TouchableOpacity>
+              />
+              <Text style={styles.clockTexto}>{horarioAtual || '--:--:--'}</Text>
+            </View>
           </View>
-        </View>
 
-        {/* Botão de Reset */}
-        <TouchableOpacity
-          style={styles.botaoReset}
-          onPress={reiniciarTudo}
-          activeOpacity={0.75}
-        >
-          <Text style={styles.resetTexto}>
-            ↺ Limpar Catraca e Aguardar Próximo Usuário
-          </Text>
-        </TouchableOpacity>
-
-        {/* Histórico */}
-        {historico.length > 0 && (
-          <View style={styles.historicoCard}>
-            <Text style={styles.historicoTitulo}>
-              Últimas Matrículas Recebidas
+          {/* Pill de Status de Sincronização */}
+          <View
+            style={[
+              styles.statusRedePill,
+              usuarioArmado && styles.statusRedePillArmado,
+            ]}
+          >
+            <Text style={styles.statusRedeTexto}>
+              {!conectado
+                ? '🟡 Conectando ao canal NFC...'
+                : usuarioArmado
+                ? `🔵 Celular de ${alunoArmadoInfo?.nome || 'usuário'} (${alunoArmadoInfo?.matricula || ''}) pronto p/ aproximar!`
+                : Platform.OS === 'web'
+                ? '🟢 Catraca Web Online • Aguardando sinal NFC do celular do usuário'
+                : `🟢 Catraca Online • Aguardando sinal NFC (Δ ${Math.round(campoDeltaUt)} µT)`}
             </Text>
-            {historico.map((item) => (
-              <View key={item.id} style={styles.historicoLinha}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.historicoNome}>{item.nome}</Text>
-                  <Text style={styles.historicoSub}>
-                    Matrícula: {item.matricula} • {item.horario}
+          </View>
+
+          {/* Display Central da Catraca */}
+          <TouchableOpacity
+            activeOpacity={usuarioArmado ? 0.8 : 1}
+            onPress={acionarSensorNfcNaCatraca}
+            style={[
+              styles.displayTerminal,
+              usuarioArmado &&
+                estado === 'aguardando' &&
+                styles.displayProntoParaReceber,
+              estado === 'lendo' && styles.displayLendo,
+              estado === 'liberado' && styles.displayLiberado,
+              estado === 'negado' && styles.displayNegado,
+            ]}
+          >
+            <View style={styles.displayHeader}>
+              <Text style={styles.displayHeaderTexto}>
+                {estado === 'aguardando' &&
+                  (usuarioArmado
+                    ? '📡 SINAL DO USUÁRIO ARMADO • APROXIME OU TOQUE NO SENSOR'
+                    : '📶 AGUARDANDO SINAL NFC DO USUÁRIO')}
+                {estado === 'lendo' && '📡 RECEBENDO MATRÍCULA VIA NFC...'}
+                {estado === 'liberado' && '✅ CATRACA LIBERADA • PODE PASSAR'}
+                {estado === 'negado' &&
+                  '⛔ CATRACA BLOQUEADA • ENTRADA RECUSADA'}
+              </Text>
+              <View
+                style={[
+                  styles.ledDisplay,
+                  estado === 'lendo' && styles.ledAzul,
+                  estado === 'liberado' && styles.ledVerde,
+                  estado === 'negado' && styles.ledVermelho,
+                ]}
+              />
+            </View>
+
+            <View style={styles.displayCorpo}>
+              {estado === 'aguardando' && (
+                <>
+                  <View
+                    style={[
+                      styles.radarCirculo,
+                      usuarioArmado && styles.radarCirculoAtivo,
+                    ]}
+                  >
+                    <Text style={styles.radarEmoji}>📡</Text>
+                  </View>
+                  <Text style={styles.displayTitulo}>
+                    {usuarioArmado
+                      ? 'APROXIME O CELULAR AQUI'
+                      : 'AGUARDANDO APROXIMAÇÃO'}
                   </Text>
-                </View>
-                <View
+                  <Text style={styles.displaySub}>
+                    {usuarioArmado
+                      ? `Aproxime o celular (${alunoArmadoInfo?.matricula}) ou toque aqui no sensor NFC da catraca`
+                      : 'A catraca está aguardando o sinal NFC do celular do usuário'}
+                  </Text>
+                </>
+              )}
+
+              {estado === 'lendo' && (
+                <>
+                  <ActivityIndicator
+                    size="large"
+                    color="#60A5FA"
+                    style={{ marginBottom: 12 }}
+                  />
+                  <Text style={styles.displayTitulo}>MATRÍCULA DETECTADA</Text>
+                  <Text style={styles.displayMatricula}>
+                    {credencialRecebida?.matricula}
+                  </Text>
+                  <Text style={styles.displaySub}>Validando acesso...</Text>
+                </>
+              )}
+
+              {estado === 'liberado' && (
+                <>
+                  <Text style={styles.iconeResultado}>✅</Text>
+                  <Text style={styles.tituloLiberado}>ENTRADA LIBERADA</Text>
+                  <Text style={styles.labelRecebido}>
+                    MATRÍCULA RECEBIDA VIA NFC:
+                  </Text>
+                  <Text style={styles.displayMatricula}>
+                    {credencialRecebida?.matricula}
+                  </Text>
+                  <Text style={styles.displayNome}>
+                    {credencialRecebida?.nome}
+                  </Text>
+                  <Text style={styles.displayCurso}>
+                    {credencialRecebida?.curso}
+                  </Text>
+                </>
+              )}
+
+              {estado === 'negado' && (
+                <>
+                  <Text style={styles.iconeResultado}>⛔</Text>
+                  <Text style={styles.tituloNegado}>ENTRADA RECUSADA</Text>
+                  <Text style={styles.labelRecebido}>
+                    MATRÍCULA RECEBIDA VIA NFC:
+                  </Text>
+                  <Text style={styles.displayMatricula}>
+                    {credencialRecebida?.matricula}
+                  </Text>
+                  <Text style={styles.displayNome}>
+                    {credencialRecebida?.nome}
+                  </Text>
+                  <Text style={styles.displayMotivo}>{motivoRecusa}</Text>
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
+
+          {/* Seletor de Decisão da Catraca (Liberar ou Recusar) */}
+          <View style={styles.seletorCard}>
+            <Text style={styles.seletorTitulo}>
+              Comportamento da Catraca ao Receber a Matrícula:
+            </Text>
+            <View style={styles.seletorBotoes}>
+              <TouchableOpacity
+                style={[
+                  styles.seletorBtn,
+                  modo === 'liberar' && styles.seletorBtnLiberar,
+                ]}
+                onPress={() => atualizarModo('liberar')}
+                activeOpacity={0.75}
+              >
+                <Text
                   style={[
-                    styles.tagStatus,
-                    item.resultado === 'liberado'
-                      ? styles.tagLiberado
-                      : styles.tagNegado,
+                    styles.seletorBtnTexto,
+                    modo === 'liberar' && styles.seletorBtnTextoAtivo,
                   ]}
                 >
-                  <Text style={styles.tagTexto}>
-                    {item.resultado === 'liberado' ? 'LIBERADO' : 'RECUSADO'}
-                  </Text>
-                </View>
-              </View>
-            ))}
+                  ✅ Liberar Entrada
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.seletorBtn,
+                  modo === 'recusar' && styles.seletorBtnRecusar,
+                ]}
+                onPress={() => atualizarModo('recusar')}
+                activeOpacity={0.75}
+              >
+                <Text
+                  style={[
+                    styles.seletorBtnTexto,
+                    modo === 'recusar' && styles.seletorBtnTextoAtivo,
+                  ]}
+                >
+                  ⛔ Recusar Entrada
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        )}
+
+          {/* Botão de Reset */}
+          <TouchableOpacity
+            style={styles.botaoReset}
+            onPress={reiniciarTudo}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.resetTexto}>
+              ↺ Limpar Catraca e Aguardar Próximo Usuário
+            </Text>
+          </TouchableOpacity>
+
+          {/* Histórico */}
+          {historico.length > 0 && (
+            <View style={styles.historicoCard}>
+              <Text style={styles.historicoTitulo}>
+                Últimas Matrículas Recebidas
+              </Text>
+              {historico.map((item) => (
+                <View key={item.id} style={styles.historicoLinha}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.historicoNome}>{item.nome}</Text>
+                    <Text style={styles.historicoSub}>
+                      Matrícula: {item.matricula} • {item.horario}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.tagStatus,
+                      item.resultado === 'liberado'
+                        ? styles.tagLiberado
+                        : styles.tagNegado,
+                    ]}
+                  >
+                    <Text style={styles.tagTexto}>
+                      {item.resultado === 'liberado' ? 'LIBERADO' : 'RECUSADO'}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -591,6 +669,11 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     paddingHorizontal: 20,
     paddingVertical: 18,
+    alignItems: 'center',
+  },
+  wrapper: {
+    width: '100%',
+    maxWidth: 480,
     alignItems: 'center',
   },
   header: {
@@ -657,6 +740,10 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     alignItems: 'center',
   },
+  statusRedePillArmado: {
+    backgroundColor: '#1E3A8A',
+    borderColor: '#3B82F6',
+  },
   statusRedeTexto: {
     color: '#CBD5E1',
     fontSize: 11,
@@ -675,6 +762,10 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     minHeight: 265,
     justifyContent: 'space-between',
+  },
+  displayProntoParaReceber: {
+    borderColor: '#38BDF8',
+    backgroundColor: '#0F2942',
   },
   displayLendo: {
     backgroundColor: '#1E3A8A',
@@ -722,6 +813,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  radarCirculoAtivo: {
+    backgroundColor: 'rgba(56, 189, 248, 0.28)',
+    borderColor: '#38BDF8',
   },
   radarEmoji: {
     fontSize: 28,
