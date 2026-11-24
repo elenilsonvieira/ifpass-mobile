@@ -1,21 +1,15 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, View, Text } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+
 import StudentCard from '../components/StudentCard';
 import NfcStatusCard from '../components/NfcStatusCard';
 import { Estudante } from '../types/Estudante';
 import { buscarDadosEstudante } from '../service/VisualizarDadosEstudante';
 
 export default function HomeScreen() {
+  const router = useRouter();
   const [estudante, setEstudante] = useState<Estudante | null>(null);
   const [carregando, setCarregando] = useState<boolean>(true);
 
@@ -46,6 +40,24 @@ export default function HomeScreen() {
         <>
           <StudentCard {...estudante} />
           <NfcStatusCard />
+
+          <View style={styles.acoesContainer}>
+            <TouchableOpacity
+              style={styles.botaoNfc}
+              onPress={() => router.push('/NFC' as any)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.botaoTexto}>Controle de Acesso (Feedback / NFC)</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.botaoLogin}
+              onPress={() => router.push('/login' as any)}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.botaoLoginTexto}>Ir para Tela de Login</Text>
+            </TouchableOpacity>
+          </View>
         </>
       ) : (
         <Text style={styles.erroText}>Não foi possível carregar os dados.</Text>
@@ -82,5 +94,33 @@ const styles = StyleSheet.create({
     color: '#D93025',
     marginTop: 20,
     fontSize: 14,
+  },
+  acoesContainer: {
+    marginTop: 16,
+    gap: 10,
+  },
+  botaoNfc: {
+    backgroundColor: '#2E7D32',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  botaoTexto: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  botaoLogin: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  botaoLoginTexto: {
+    color: '#334155',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

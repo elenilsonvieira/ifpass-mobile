@@ -37,6 +37,7 @@
           "imageWidth": 76
         }
       ],
+      "expo-audio",
       "react-native-nfc-manager"
     ],
     "experiments": {

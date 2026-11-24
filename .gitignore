@@ -30,15 +30,12 @@ yarn-error.*
 .DS_Store
 *.pem
 
-*package-lock.json
 # local env files
 .env*.local
 
-.vscode/
 # typescript
 *.tsbuildinfo
 
-* package-lock.json
 example
 
 # generated native folders
